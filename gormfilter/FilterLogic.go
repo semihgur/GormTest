@@ -23,30 +23,29 @@ func BuildGormQuery(query *gorm.DB, filter interface{}) error {
 	scanType := reflect.TypeOf(filter)   // type of UserFilter
 	collectConditions(scanType, scanValue, assocConditions, &topConds)
 
+	// 4) Apply any top-level conditions (filter on users table itself)
+	for _, c := range topConds {
+		query = query.Where(c.sql, c.vals...)
+	}
+
 	// 3) For each association path in assocConditions:
 	for assocPath, conds := range assocConditions {
 		if assocPath == "" {
 			// This would never happen: we store top-level in topConds.
 			continue
 		}
-		if len(conds) == 0 {
-			// No filter: preload everything under that path
-			query = query.Preload(assocPath)
+		if len(conds) > 0 {
+			// Always do Joins(...) once per association, then apply all WHEREs
+			query = query.Joins(assocPath)
+			for _, c := range conds {
+				query = query.Where(c.sql, c.vals...)
+			}
+			return nil
 		} else {
-			// If there are any conditions, apply them in a closure
-			query = query.Preload(assocPath, func(gdb *gorm.DB) *gorm.DB {
-				for _, c := range conds {
-					gdb = gdb.Where(c.sql, c.vals...)
-				}
-				return gdb
-			})
-			//query.Joins(assocPath) // Ensure the join is applied
+			// Then: Preload full association (not filtered)
+			query = query.Preload(assocPath)
 		}
-	}
 
-	// 4) Apply any top-level conditions (filter on users table itself)
-	for _, c := range topConds {
-		query = query.Where(c.sql, c.vals...)
 	}
 
 	return nil
@@ -76,7 +75,7 @@ func collectConditions(
 		}
 
 		//checking if assocConds has a key
-		if _, ok := assocConds[field.Name]; !ok {
+		if _, ok := assocConds[preloadTag]; !ok && preloadTag != "" {
 			//create an empty array with preload key inside assocConds
 			assocConds[preloadTag] = []condStruct{}
 		}
